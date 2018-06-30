@@ -1,26 +1,28 @@
 {
-  "name": "itunes-api",
+  "name": "itunes-win-api",
   "version": "1.5.2",
-  "description": "itunes-api",
+  "description": "itunes-win-api",
   "scripts": {
     "start": "node app.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/maddox/itunes-api"
+    "url": "https://github.com/diosdog/itunes-win-api"
   },
   "author": "Jon Maddox <jon@jonmaddox.com>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/maddox/itunes-api/issues"
+    "url": "https://github.com/diosdog/itunes-win-api/issues"
   },
   "dependencies": {
-    "express": "^4.12.4",
-    "morgan": "^1.6.1",
-    "body-parser": "^1.12.4",
-    "local-itunes": "^0.3.0",
-    "osa": "2.2.0",
-    "osascript": "1.2.0",
-    "parameterize": "^0.0.7"
+    "body-parser": "^1.18.3",
+    "express": "^4.16.3",
+    "forever": "^0.15.3",
+    "morgan": "^1.9.0",
+    "node-powershell": "^3.3.1",
+    "package.json": "^2.0.1",
+    "parameterize": "0.0.7",
+    "tmp": "0.0.33",
+    "winax": "^1.0.10"
   }
 }

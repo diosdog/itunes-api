@@ -4,11 +4,10 @@ var util = require('util')
 var express = require('express')
 var morgan = require('morgan')
 var bodyParser = require('body-parser')
-var iTunes = require('local-itunes')
-var osa = require('osa')
-var osascript = require('osascript')
-var airplay = require('./lib/airplay')
 var parameterize = require('parameterize');
+const shell = require('node-powershell');
+var winax = require('winax');
+var tmp = require('tmp');
 
 var app = express()
 app.use(bodyParser.urlencoded({ extended: false }))
@@ -16,6 +15,38 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 var logFormat = "'[:date[iso]] - :remote-addr - :method :url :status :response-time ms - :res[content-length]b'"
 app.use(morgan(logFormat))
+
+var tmpDir = null;
+
+
+function win_getCurrentState(){
+	itunes = new ActiveXObject('iTunes.Application')
+
+	currentState = {};
+
+	currentState['player_state'] = itunes.PlayerState ? 'playing' : 'paused' //TODO: convert to expected format to match mac version instead of 0/1 for paused/playing
+
+	currentTrack = itunes.CurrentTrack
+	currentPlaylist = itunes.CurrentPlaylist
+
+	currentState['id'] = currentTrack.trackID.toString()
+	currentState['name'] = currentTrack.Name
+	currentState['artist'] = currentTrack.Artist
+    currentState['album'] = currentTrack.Album
+    currentState['playlist'] = currentPlaylist.Favorites
+    currentState['volume'] = itunes.SoundVolume
+    currentState['muted'] = itunes.Mute
+    currentState['repeat'] = 0 //TODO: figure out if this is accessible in COM object
+    currentState['shuffle'] = 0 //TODO: figure out if this is accessible in COM object
+
+	if (currentTrack.Year) {
+		currentState['album'] += " (" + currentTrack.Year + ")";
+	}
+
+	winax.release(itunes)
+
+	return currentState
+}
 
 function getCurrentState(){
   itunes = Application('iTunes');
@@ -51,15 +82,20 @@ function sendResponse(error, res){
     console.log(error)
     res.sendStatus(500)
   }else{
-    osa(getCurrentState, function (error, state) {
-      if (error) {
-        console.log(error)
-        res.sendStatus(500)
-      }else{
-        res.json(state)
-      }
-    })
+    //osa(getCurrentState, function (error, state) {
+	try {
+		state = win_getCurrentState()
+		res.json(state)
+	} catch(error) {
+		console.log(error)
+		res.sendStatus(500)
+	}
   }
+}
+
+function win_playPlaylist(nameOrId) {
+	//TODO: find if this is accessible in COM object
+	return false;
 }
 
 function playPlaylist(nameOrId){
@@ -75,6 +111,18 @@ function playPlaylist(nameOrId){
   return true;
 }
 
+function win_setVolume(level){
+	itunes = new ActiveXObject('iTunes.Application');
+	var ret = true;
+	if (level) {
+		itunes.SoundVolume = parseInt(level);
+	} else {
+		ret = false;
+	}
+	winax.release(itunes)
+	return ret;
+}
+
 function setVolume(level){
   itunes = Application('iTunes');
 
@@ -86,6 +134,18 @@ function setVolume(level){
   }
 }
 
+function win_setMuted(muted){
+	itunes = new ActiveXObject('iTunes.Application');
+	var ret = true;
+	if (muted) {
+		itunes.Mute = muted;
+	} else {
+		ret = false;
+	}
+	winax.release(itunes)
+	return ret;
+}
+
 function setMuted(muted){
   itunes = Application('iTunes');
 
@@ -95,6 +155,11 @@ function setMuted(muted){
   }else{
     return false;
   }
+}
+
+function win_setShuffle(mode) {
+	//TODO: figure out if com object supports this
+	return false;
 }
 
 function setShuffle(mode){
@@ -114,6 +179,11 @@ function setShuffle(mode){
   }
 }
 
+function win_setRepeat(mode){
+	//TODO: figure out if com object supports this
+	return false;
+}
+
 function setRepeat(mode){
   itunes = Application('iTunes');
 
@@ -128,6 +198,30 @@ function setRepeat(mode){
     itunes.songRepeat = mode;
     return true;
   }
+}
+
+function win_getPlaylistsFromItunes(){
+
+	itunes = new ActiveXObject('iTunes.Application');
+	playlists = itunes.GetITObjectByID(itunes.LibrarySource.Index,0,0,0).Playlists
+
+    playlistNames = [];
+
+    for (var i = 0; i < playlists.length; i++) {
+      playlist = playlists[i];
+
+      data = {};
+      data['id'] = playlist.Index;
+      data['name'] = playlist.Name;
+      data['loved'] = false; //TODO
+      data['duration_in_seconds'] = playlist.Duration;
+      data['time'] = playlist.Time;
+      playlistNames.push(data);
+    }
+
+	winax.release(itunes);
+
+    return playlistNames;
 }
 
 function getPlaylistsFromItunes(){
@@ -152,16 +246,11 @@ function getPlaylistsFromItunes(){
 }
 
 function getPlaylists(callback){
-  osa(getPlaylistsFromItunes, function (error, data) {
-    if (error){
-      callback(error)
-    }else{
-      for (var i = 0; i < data.length; i++) {
-        data[i]['id'] = parameterize(data[i]['name'])
-      }
-      callback(null, data)
-    }
-  })
+	data = win_getPlaylistsFromItunes();
+	//(not sure if this is necessary for win version)
+	for (var i = 0; i < data.length; i++) {
+	  data[i]['id'] = parameterize(data[i]['name'])
+	}
 }
 
 app.get('/_ping', function(req, res){
@@ -172,84 +261,106 @@ app.get('/', function(req, res){
   res.sendfile('index.html');
 })
 
+
 app.put('/play', function(req, res){
-  iTunes.play(function (error){
-    sendResponse(error, res)
-  })
+	try {
+		itunes = new ActiveXObject('iTunes.Application');
+		itunes.Play();
+		winax.release(itunes);
+		sendResponse(null,res);
+	} catch(error) {
+		sendResponse(error, res);
+	}
 })
 
 app.put('/pause', function(req, res){
-  iTunes.pause(function (error){
-    sendResponse(error, res)
-  })
+	try {
+  	  itunes = new ActiveXObject('iTunes.Application');
+  	  itunes.Pause();
+  	  sendResponse(null,res);
+    } catch(error) {
+  	  sendResponse(error, res);
+    }
 })
 
 app.put('/playpause', function(req, res){
-  iTunes.playpause(function (error){
-    sendResponse(error, res)
-  })
+	try {
+  	  itunes = new ActiveXObject('iTunes.Application');
+  	  itunes.PlayPause();
+  	  winax.release(itunes);
+  	  sendResponse(null,res);
+    } catch(error) {
+  	  sendResponse(error, res);
+    }
 })
 
 app.put('/stop', function(req, res){
-  iTunes.stop(function (error){
-    sendResponse(error, res)
-  })
+	try {
+  	  itunes = new ActiveXObject('iTunes.Application');
+  	  itunes.Stop()
+  	  winax.release(itunes);
+  	  sendResponse(null,res);
+    } catch(error) {
+  	  sendResponse(error, res);
+    }
 })
 
 app.put('/previous', function(req, res){
-  iTunes.previous(function (error){
-    sendResponse(error, res)
-  })
+	try {
+  	  itunes = new ActiveXObject('iTunes.Application');
+  	  itunes.PreviousTrack()
+  	  winax.release(itunes);
+  	  sendResponse(null,res);
+    } catch(error) {
+  	  sendResponse(error, res);
+    }
 })
 
 app.put('/next', function(req, res){
-  iTunes.next(function (error){
-    sendResponse(error, res)
-  })
+	try {
+  	  itunes = new ActiveXObject('iTunes.Application');
+  	  itunes.NextTrack()
+  	  winax.release(itunes);
+  	  sendResponse(null,res);
+    } catch(error) {
+  	  sendResponse(error, res);
+    }
 })
 
 app.put('/volume', function(req, res){
-  osa(setVolume, req.body.level, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      sendResponse(error, res)
-    }
-  })
+	try {
+		win_setVolume(req.body.level);
+		sendResponse(null,res);
+	} catch(error) {
+		sendResponse(error, res);
+	}
 })
 
 app.put('/mute', function(req, res){
-  osa(setMuted, req.body.muted, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      sendResponse(error, res)
-    }
-  })
+	try {
+		win_setMuted(req.body.muted);
+		sendResponse(null,res);
+	} catch(error) {
+		sendResponse(error, res);
+	}
 })
 
 app.put('/shuffle', function(req, res){
-  osa(setShuffle, req.body.mode, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      sendResponse(error, res)
-    }
-  })
+	try {
+		win_setShuffle(req.body.mode);
+		sendResponse(null,res);
+	} catch(error) {
+		sendResponse(error, res);
+	}
 })
 
 app.put('/repeat', function(req, res){
-  osa(setRepeat, req.body.mode, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      sendResponse(error, res)
-    }
-  })
+	try {
+		win_setRepeat(req.body.mode);
+		sendResponse(null,res);
+	} catch(error) {
+		sendResponse(error, res);
+	}
 })
 
 app.get('/now_playing', function(req, res){
@@ -258,101 +369,53 @@ app.get('/now_playing', function(req, res){
 })
 
 app.get('/artwork', function(req, res){
-  osascript.file(path.join(__dirname, 'lib', 'art.applescript'), function (error, data) {
-    res.type('image/jpeg')
-    res.sendFile('/tmp/currently-playing.jpg')
-  })
+	try {
+		var tmpFile = tmp.tmpNameSync() + ".png"; //TODO: handle other formats rather than just assuming png
+		itunes = new ActiveXObject('iTunes.Application');
+		itunes.CurrentTrack.Artwork(1).SaveArtworkToFile(tmpFile);
+		winax.release(itunes);
+
+		res.type = 'image/png';
+		res.sendFile(tmpFile)
+	} catch(error) {
+		sendResponse(error, res)
+	}
 })
 
 app.get('/playlists', function (req, res) {
-  getPlaylists(function (error, data) {
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      res.json({playlists: data})
-    }
-  })
+	sendResponse("Not supported",res);
+	return;
+	try {
+		data = getPlaylists();
+		res.json({playlists: data});
+	} catch(error) {
+		sendResponse(error,res);
+	}
 })
 
 app.put('/playlists/:id/play', function (req, res) {
-  osa(getPlaylistsFromItunes, function (error, data) {
-    if (error){
-      res.sendStatus(500)
-    }else{
-      for (var i = 0; i < data.length; i++) {
-        playlist = data[i]
-        if (req.params.id == parameterize(playlist['name'])) {
-          osa(playPlaylist, playlist['id'], function (error, data) {
-            sendResponse(error, res)
-          })
-          return
-        }
-      }
-      res.sendStatus(404)
-    }
-  })
-
+	sendResponse("Not supported",res); //TODO: add support for win version
 })
 
 app.get('/airplay_devices', function(req, res){
-  osa(airplay.listAirPlayDevices, function(error, data, log){
-    if (error){
-      res.sendStatus(500)
-    }else{
-      res.json({'airplay_devices': data})
-    }
-  })
+  //sendResponse("Not supported",res); //TODO: add support for win version
+  res.json({'airplay_devices': {}})
 })
 
 app.get('/airplay_devices/:id', function(req, res){
-  osa(airplay.listAirPlayDevices, function(error, data, log){
-    if (error){
-      res.sendStatus(500)
-    }else{
-      for (var i = 0; i < data.length; i++) {
-        device = data[i]
-        if (req.params.id == device['id']) {
-          res.json(device)
-          return
-        }
-      }
-      res.sendStatus(404)
-    }
-  })
+  sendResponse("Not supported",res); //TODO: add support for win version
 })
 
 app.put('/airplay_devices/:id/on', function (req, res) {
-  osa(airplay.setSelectionStateAirPlayDevice, req.params.id, true, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      res.json(data)
-    }
-  })
+  sendResponse("Not supported",res); //TODO: add support for win version
 })
 
 app.put('/airplay_devices/:id/off', function (req, res) {
-  osa(airplay.setSelectionStateAirPlayDevice, req.params.id, false, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      res.json(data)
-    }
-  })
+  sendResponse("Not supported",res); //TODO: add support for win version
 })
 
 app.put('/airplay_devices/:id/volume', function (req, res) {
-  osa(airplay.setVolumeAirPlayDevice, req.params.id, req.body.level, function(error, data, log){
-    if (error){
-      console.log(error)
-      res.sendStatus(500)
-    }else{
-      res.json(data)
-    }
-  })
+  sendResponse("Not supported",res); //TODO: add support for win version
 })
 
 app.listen(process.env.PORT || 8181);
